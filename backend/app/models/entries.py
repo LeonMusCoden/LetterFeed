@@ -16,7 +16,7 @@ class Entry(Base):
     subject = Column(String)
     body = Column(Text)
     received_at = Column(
-        DateTime(timezone=True), default=datetime.datetime.now(datetime.UTC)
+            DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.UTC)
     )
     message_id = Column(String, unique=True, index=True, nullable=False)
 
