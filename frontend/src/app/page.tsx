@@ -14,6 +14,7 @@ import { LoadingSpinner } from "@/components/letterfeed/LoadingSpinner"
 import { Header } from "@/components/letterfeed/Header"
 import { NewsletterList } from "@/components/letterfeed/NewsletterList"
 import { EmptyState } from "@/components/letterfeed/EmptyState"
+import { MasterFeedCard } from "@/components/letterfeed/MasterFeedCard"
 import { NewsletterDialog } from "@/components/letterfeed/NewsletterDialog"
 import { SettingsDialog } from "@/components/letterfeed/SettingsDialog"
 
@@ -67,6 +68,8 @@ function LetterFeedApp() {
           onOpenAddNewsletter={() => setIsAddDialogOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
         />
+
+        {newsletters.length > 0 && <MasterFeedCard />}
 
         {newsletters.length > 0 ? (
           <NewsletterList newsletters={newsletters} onEditNewsletter={openEditDialog} />

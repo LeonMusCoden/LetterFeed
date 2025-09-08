@@ -7,7 +7,51 @@ from app.crud.entries import create_entry
 from app.crud.newsletters import create_newsletter
 from app.schemas.entries import EntryCreate
 from app.schemas.newsletters import NewsletterCreate
-from app.services.feed_generator import generate_feed
+from app.services.feed_generator import generate_feed, generate_master_feed
+
+
+def test_generate_master_feed(db_session: Session):
+    """Test the master feed generation for all newsletters."""
+    # Create newsletters and entries
+    nl1 = create_newsletter(
+        db_session,
+        NewsletterCreate(name="Newsletter A", sender_emails=["a@example.com"]),
+    )
+    create_entry(
+        db_session,
+        EntryCreate(
+            subject="Entry A1", body="<p>Body A1</p>", message_id=f"<{uuid.uuid4()}>"
+        ),
+        nl1.id,
+    )
+
+    nl2 = create_newsletter(
+        db_session,
+        NewsletterCreate(name="Newsletter B", sender_emails=["b@example.com"]),
+    )
+    create_entry(
+        db_session,
+        EntryCreate(
+            subject="Entry B1", body="<p>Body B1</p>", message_id=f"<{uuid.uuid4()}>"
+        ),
+        nl2.id,
+    )
+
+    # Generate the master feed
+    feed_xml = generate_master_feed(db_session)
+    assert feed_xml is not None
+
+    # Parse and verify
+    root = ET.fromstring(feed_xml)
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    assert root.find("atom:title", ns).text == "LetterFeed: All Newsletters"
+    assert root.find("atom:id", ns).text == "urn:letterfeed:master"
+
+    entry_titles = {
+        entry.find("atom:title", ns).text for entry in root.findall("atom:entry", ns)
+    }
+    assert "[Newsletter A] Entry A1" in entry_titles
+    assert "[Newsletter B] Entry B1" in entry_titles
 
 
 def test_generate_feed(db_session: Session):

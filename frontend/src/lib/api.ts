@@ -208,3 +208,7 @@ export function getFeedUrl(newsletter: Newsletter): string {
     const feedIdentifier = newsletter.slug || newsletter.id;
     return `${API_BASE_URL}/feeds/${feedIdentifier}`;
 }
+
+export function getMasterFeedUrl(): string {
+    return `${API_BASE_URL}/feeds/all`;
+}

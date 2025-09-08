@@ -1,11 +1,24 @@
 from nanoid import generate
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.logging import get_logger
 from app.models.entries import Entry
 from app.schemas.entries import EntryCreate
 
 logger = get_logger(__name__)
+
+
+def get_all_entries(db: Session, skip: int = 0, limit: int = 100):
+    """Retrieve all entries from all newsletters, sorted by received date."""
+    logger.debug(f"Querying all entries with skip={skip}, limit={limit}")
+    return (
+        db.query(Entry)
+        .options(joinedload(Entry.newsletter))
+        .order_by(Entry.received_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
 def get_entries_by_newsletter(

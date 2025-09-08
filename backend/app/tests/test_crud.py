@@ -1,9 +1,10 @@
+import time
 import uuid
 from unittest.mock import patch
 
 from sqlalchemy.orm import Session
 
-from app.crud.entries import create_entry, get_entries_by_newsletter
+from app.crud.entries import create_entry, get_all_entries, get_entries_by_newsletter
 from app.crud.newsletters import (
     create_newsletter,
     get_newsletter_by_identifier,
@@ -329,3 +330,59 @@ def test_create_multiple_entries_have_different_timestamps(db_session: Session):
     entry2 = create_entry(db_session, entry_data_2, newsletter.id)
 
     assert entry1.received_at != entry2.received_at
+
+
+def test_get_all_entries(db_session: Session):
+    """Test getting all entries from all newsletters."""
+    # Create two newsletters
+    newsletter1 = create_newsletter(
+        db_session,
+        NewsletterCreate(
+            name="Newsletter One", sender_emails=[f"one_{uuid.uuid4()}@test.com"]
+        ),
+    )
+    time.sleep(0.1)  # Ensure different timestamps
+    newsletter2 = create_newsletter(
+        db_session,
+        NewsletterCreate(
+            name="Newsletter Two", sender_emails=[f"two_{uuid.uuid4()}@test.com"]
+        ),
+    )
+
+    # Create entries for both
+    entry1 = create_entry(
+        db_session,
+        EntryCreate(
+            subject="Entry 1", body="Body 1", message_id=f"<{uuid.uuid4()}@test.com>"
+        ),
+        newsletter1.id,
+    )
+    time.sleep(0.1)
+    entry2 = create_entry(
+        db_session,
+        EntryCreate(
+            subject="Entry 2", body="Body 2", message_id=f"<{uuid.uuid4()}@test.com>"
+        ),
+        newsletter2.id,
+    )
+    time.sleep(0.1)
+    entry3 = create_entry(
+        db_session,
+        EntryCreate(
+            subject="Entry 3", body="Body 3", message_id=f"<{uuid.uuid4()}@test.com>"
+        ),
+        newsletter1.id,
+    )
+
+    # Get all entries
+    all_entries = get_all_entries(db_session, limit=10)
+
+    # Assertions
+    assert len(all_entries) == 3
+    # Check for descending order by received_at
+    assert all_entries[0].id == entry3.id
+    assert all_entries[1].id == entry2.id
+    assert all_entries[2].id == entry1.id
+    # Check that newsletter relationship is loaded
+    assert all_entries[0].newsletter.name == "Newsletter One"
+    assert all_entries[1].newsletter.name == "Newsletter Two"
