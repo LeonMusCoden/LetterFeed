@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from unittest.mock import ANY, MagicMock, patch
 
 from sqlalchemy.orm import Session
@@ -101,10 +102,14 @@ def test_process_emails(mock_imap, db_session: Session):
 @patch("app.core.scheduler.job")
 @patch("app.core.scheduler.SessionLocal")
 @patch("app.core.scheduler.scheduler")
+@patch("app.core.scheduler.datetime")
 def test_start_scheduler_with_interval(
-    mock_scheduler, mock_session_local, mock_job, db_session: Session
+    mock_datetime, mock_scheduler, mock_session_local, mock_job, db_session: Session
 ):
     """Test starting the scheduler with an interval."""
+    fixed_now = datetime(2025, 10, 20, 12, 0, 0)
+    mock_datetime.now.return_value = fixed_now
+
     mock_session_local.return_value = db_session
     mock_scheduler.running = False
     settings_data = SettingsCreate(
@@ -119,11 +124,16 @@ def test_start_scheduler_with_interval(
 
     start_scheduler_with_interval()
 
+    expected_run_date = fixed_now + timedelta(seconds=5)
+
     mock_scheduler.add_job.assert_called_with(
-        ANY, "interval", minutes=30, id="email_check_job", replace_existing=True
+        ANY,
+        "date",
+        run_date=expected_run_date,
+        id="initial_email_check",
+        replace_existing=True,
     )
     mock_scheduler.start.assert_called_once()
-    mock_job.assert_called_once()
 
 
 @patch("app.core.scheduler.SessionLocal")
