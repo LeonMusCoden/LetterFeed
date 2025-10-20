@@ -124,12 +124,10 @@ def test_start_scheduler_with_interval(
 
     start_scheduler_with_interval()
 
-    expected_run_date = fixed_now + timedelta(seconds=5)
-
     mock_scheduler.add_job.assert_called_with(
         ANY,
         "date",
-        run_date=expected_run_date,
+        run_date=fixed_now,
         id="initial_email_check",
         replace_existing=True,
     )

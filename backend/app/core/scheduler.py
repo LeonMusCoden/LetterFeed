@@ -47,7 +47,7 @@ def start_scheduler_with_interval():
             scheduler.add_job(
                 job,
                 "date",
-                run_date=datetime.now() + timedelta(seconds=5),
+                run_date=datetime.now(),
                 id="initial_email_check",
                 replace_existing=True,
             )
