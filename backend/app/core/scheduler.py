@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.core.database import SessionLocal
@@ -42,8 +44,13 @@ def start_scheduler_with_interval():
             replace_existing=True,
         )
         if not scheduler.running:
-            # Run the job immediately once
-            job()
+            scheduler.add_job(
+                job,
+                "date",
+                run_date=datetime.now() + timedelta(seconds=5),
+                id="initial_email_check",
+                replace_existing=True,
+            )
             scheduler.start()
             logger.info("Scheduler started.")
         else:
