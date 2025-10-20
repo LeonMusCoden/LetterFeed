@@ -199,6 +199,8 @@ def _process_single_email(
 
     subject = str(make_header(decode_header(msg["Subject"])))
     body = _get_email_body(msg)
+    date_str = msg["Date"]
+    received_at = email.utils.parsedate_to_datetime(date_str) if date_str else None
 
     if newsletter.extract_content:
         cleaned_data = _extract_and_clean_html(body)
@@ -206,7 +208,9 @@ def _process_single_email(
         # so we only override the body.
         body = cleaned_data["body"]
 
-    entry_schema = EntryCreate(subject=subject, body=body, message_id=message_id)
+    entry_schema = EntryCreate(
+        subject=subject, body=body, message_id=message_id, received_at=received_at
+    )
     new_entry = create_entry(db, entry_schema, newsletter.id)
 
     if not new_entry:

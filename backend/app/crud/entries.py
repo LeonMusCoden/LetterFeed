@@ -29,9 +29,16 @@ def get_entries_by_newsletter(
     logger.debug(
         f"Querying entries for newsletter_id={newsletter_id}, skip={skip}, limit={limit}"
     )
-    query = db.query(Entry).filter(Entry.newsletter_id == newsletter_id).offset(skip)
+    query = (
+        db.query(Entry)
+        .order_by(Entry.received_at.desc())
+        .filter(Entry.newsletter_id == newsletter_id)
+        .offset(skip)
+    )
+
     if limit is not None:
         query = query.limit(limit)
+
     return query.all()
 
 

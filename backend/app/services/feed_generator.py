@@ -41,11 +41,14 @@ def _add_entries_to_feed(
             else entry.subject
         )
         fe.content(entry.body, type="html")
+
         if entry.received_at.tzinfo is None:
             timezone_aware_received_at = entry.received_at.replace(tzinfo=tz.tzutc())
             fe.published(timezone_aware_received_at)
+            fe.updated(timezone_aware_received_at)
         else:
             fe.published(entry.received_at)
+            fe.updated(entry.received_at)
 
 
 def generate_feed(db: Session, feed_identifier: str):

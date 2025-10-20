@@ -9,6 +9,7 @@ class EntryBase(BaseModel):
     subject: str
     body: str
     message_id: str
+    received_at: datetime.datetime | None = None
 
 
 class EntryCreate(EntryBase):
