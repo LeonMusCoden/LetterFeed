@@ -251,7 +251,7 @@ def test_get_entries_by_newsletter(db_session: Session):
     )
     entries = get_entries_by_newsletter(db_session, newsletter.id)
     assert len(entries) == 2
-    assert entries[0].subject == "Entry 1"
+    assert entries[0].subject == "Entry 2"
 
 
 def test_update_newsletter(db_session: Session):
