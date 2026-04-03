@@ -1,5 +1,7 @@
+import re
 from typing import List
 
+from bs4 import BeautifulSoup
 from dateutil import tz
 from feedgen.feed import FeedGenerator
 from sqlalchemy.orm import Session
@@ -9,6 +11,27 @@ from app.crud.entries import get_all_entries, get_entries_by_newsletter
 from app.crud.newsletters import get_newsletter_by_identifier
 from app.crud.settings import get_settings
 from app.models.entries import Entry
+
+
+def _make_responsive(html: str) -> str:
+    """Strip hardcoded widths and add responsive inline styles to HTML content."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    for tag in soup.find_all(["img", "table", "td", "div"]):
+        # Remove hardcoded width/height attributes
+        tag.attrs.pop("width", None)
+        tag.attrs.pop("height", None)
+
+        # Override width/height in existing inline styles
+        existing_style = tag.get("style", "")
+        existing_style = re.sub(r"width\s*:\s*[^;]+;?", "", existing_style)
+        existing_style = re.sub(r"height\s*:\s*[^;]+;?", "", existing_style)
+
+        responsive = "max-width:100%;height:auto;"
+        new_style = f"{responsive}{existing_style}".strip()
+        tag["style"] = new_style
+
+    return str(soup)
 
 
 def _create_feed_generator(
@@ -29,13 +52,6 @@ def _create_feed_generator(
     return fg
 
 
-RESPONSIVE_WRAPPER = (
-    '<div style="max-width:100%;overflow-x:hidden;">'
-    "<style>img,table,td,div{max-width:100%!important;height:auto!important;}</style>"
-)
-RESPONSIVE_WRAPPER_CLOSE = "</div>"
-
-
 def _add_entries_to_feed(
     fg: FeedGenerator, entries: List[Entry], is_master_feed: bool = False
 ):
@@ -48,8 +64,7 @@ def _add_entries_to_feed(
             if is_master_feed
             else entry.subject
         )
-        wrapped_body = f"{RESPONSIVE_WRAPPER}{entry.body}{RESPONSIVE_WRAPPER_CLOSE}"
-        fe.content(wrapped_body, type="html")
+        fe.content(_make_responsive(entry.body), type="html")
 
         if entry.received_at.tzinfo is None:
             timezone_aware_received_at = entry.received_at.replace(tzinfo=tz.tzutc())
