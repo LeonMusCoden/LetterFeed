@@ -5,13 +5,20 @@ from sqlalchemy.orm import Session
 
 from app.crud.entries import create_entry
 from app.crud.newsletters import create_newsletter
+from app.crud.settings import create_or_update_settings
 from app.schemas.entries import EntryCreate
 from app.schemas.newsletters import NewsletterCreate
+from app.schemas.settings import SettingsCreate
 from app.services.feed_generator import generate_feed, generate_master_feed
 
 
 def test_generate_master_feed(db_session: Session):
     """Test the master feed generation for all newsletters."""
+    create_or_update_settings(
+        db_session,
+        SettingsCreate(imap_server="test.com", imap_username="test", imap_password="pw"),
+    )
+
     # Create newsletters and entries
     nl1 = create_newsletter(
         db_session,
@@ -56,6 +63,12 @@ def test_generate_master_feed(db_session: Session):
 
 def test_generate_feed(db_session: Session):
     """Test the feed generation for a newsletter with entries."""
+    # Create settings (required by generate_feed)
+    create_or_update_settings(
+        db_session,
+        SettingsCreate(imap_server="test.com", imap_username="test", imap_password="pw"),
+    )
+
     # Create a newsletter
     newsletter_data = NewsletterCreate(
         name="Feed Test Newsletter", sender_emails=["feed@example.com"]
@@ -102,12 +115,10 @@ def test_generate_feed(db_session: Session):
     assert "First Entry" in entry_titles
     assert "Second Entry" in entry_titles
 
-    # Check content of one entry
+    # Check content of one entry (wrapped in responsive container)
     first_entry_element = root.find(".//atom:title[.='First Entry']/..", ns)
-    assert (
-        first_entry_element.find("atom:content", ns).text
-        == "<p>This is the first entry.</p>"
-    )
+    content_text = first_entry_element.find("atom:content", ns).text
+    assert "<p>This is the first entry.</p>" in content_text
 
 
 def test_generate_feed_nonexistent_newsletter(db_session: Session):

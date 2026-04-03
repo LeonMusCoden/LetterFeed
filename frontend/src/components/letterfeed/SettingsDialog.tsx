@@ -254,6 +254,26 @@ export function SettingsDialog({
                 disabled={settings.locked_fields.includes("email_check_interval")}
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="max-entries">Max Entries Per Feed</Label>
+              <Input
+                id="max-entries"
+                type="number"
+                min="0"
+                value={currentSettings.max_entries_per_feed}
+                onChange={(e) =>
+                  handleSettingsChange(
+                    "max_entries_per_feed",
+                    Number.parseInt(e.target.value) || 0
+                  )
+                }
+                placeholder="0 (unlimited)"
+                disabled={settings.locked_fields.includes("max_entries_per_feed")}
+              />
+              <p className="text-xs text-muted-foreground">
+                0 = unlimited.
+              </p>
+            </div>
             <div className="flex items-center space-x-2 pt-2">
               <Checkbox
                 id="mark-read"

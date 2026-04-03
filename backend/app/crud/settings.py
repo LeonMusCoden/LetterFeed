@@ -58,6 +58,7 @@ def get_settings(db: Session, with_password: bool = False) -> SettingsSchema:
         "mark_as_read": db_settings.mark_as_read,
         "email_check_interval": db_settings.email_check_interval,
         "auto_add_new_senders": db_settings.auto_add_new_senders,
+        "max_entries_per_feed": db_settings.max_entries_per_feed,
         "auth_username": db_settings.auth_username,
     }
 

@@ -79,7 +79,7 @@ jobs:
         id: meta_backend
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/leonmuscoden/letterfeed-backend
+          images: ghcr.io/${{ github.repository_owner }}/letterfeed-backend
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
@@ -119,7 +119,7 @@ jobs:
         id: meta_frontend
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/leonmuscoden/letterfeed-frontend
+          images: ghcr.io/${{ github.repository_owner }}/letterfeed-frontend
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}

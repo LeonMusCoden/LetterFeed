@@ -55,7 +55,7 @@ def test_process_single_email_with_newsletter_move_folder(db_session: Session):
     _process_single_email("1", mock_mail, db_session, sender_map, settings)
 
     # 3. ASSERT
-    mock_mail.copy.assert_called_once_with("1", "NewsletterArchive")
+    mock_mail.copy.assert_called_once_with("1", '"NewsletterArchive"')
     mock_mail.store.assert_any_call("1", "+FLAGS", "\\Deleted")
 
 
@@ -80,7 +80,7 @@ def test_process_single_email_with_global_move_folder(db_session: Session):
     _process_single_email("1", mock_mail, db_session, sender_map, settings)
 
     # 3. ASSERT
-    mock_mail.copy.assert_called_once_with("1", "GlobalArchive")
+    mock_mail.copy.assert_called_once_with("1", '"GlobalArchive"')
     mock_mail.store.assert_any_call("1", "+FLAGS", "\\Deleted")
 
 

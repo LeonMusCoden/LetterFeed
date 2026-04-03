@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     mark_as_read: bool = False
     email_check_interval: int = 15
     auto_add_new_senders: bool = False
+    max_entries_per_feed: int = 0
     auth_username: str | None = None
     auth_password: str | None = None
     secret_key: str | None = Field(
