@@ -271,7 +271,7 @@ export function SettingsDialog({
                 disabled={settings.locked_fields.includes("max_entries_per_feed")}
               />
               <p className="text-xs text-muted-foreground">
-                0 = unlimited. Older entries are deleted when the limit is exceeded.
+                0 = unlimited.
               </p>
             </div>
             <div className="flex items-center space-x-2 pt-2">
