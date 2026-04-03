@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.crud.entries import get_all_entries, get_entries_by_newsletter
 from app.crud.newsletters import get_newsletter_by_identifier
+from app.crud.settings import get_settings
 from app.models.entries import Entry
 
 
@@ -28,6 +29,13 @@ def _create_feed_generator(
     return fg
 
 
+RESPONSIVE_WRAPPER = (
+    '<div style="max-width:100%;overflow-x:hidden;">'
+    "<style>img,table,td,div{max-width:100%!important;height:auto!important;}</style>"
+)
+RESPONSIVE_WRAPPER_CLOSE = "</div>"
+
+
 def _add_entries_to_feed(
     fg: FeedGenerator, entries: List[Entry], is_master_feed: bool = False
 ):
@@ -40,7 +48,8 @@ def _add_entries_to_feed(
             if is_master_feed
             else entry.subject
         )
-        fe.content(entry.body, type="html")
+        wrapped_body = f"{RESPONSIVE_WRAPPER}{entry.body}{RESPONSIVE_WRAPPER_CLOSE}"
+        fe.content(wrapped_body, type="html")
 
         if entry.received_at.tzinfo is None:
             timezone_aware_received_at = entry.received_at.replace(tzinfo=tz.tzutc())
@@ -57,7 +66,9 @@ def generate_feed(db: Session, feed_identifier: str):
     if not newsletter:
         return None
 
-    entries = get_entries_by_newsletter(db, newsletter.id)
+    app_settings = get_settings(db)
+    limit = app_settings.max_entries_per_feed or None
+    entries = get_entries_by_newsletter(db, newsletter.id, limit=limit)
 
     feed_url = f"{settings.app_base_url}/feeds/{newsletter.slug or newsletter.id}"
     sender_emails = ", ".join([s.email for s in newsletter.senders])
@@ -77,7 +88,8 @@ def generate_feed(db: Session, feed_identifier: str):
 
 def generate_master_feed(db: Session):
     """Generate a master Atom feed for all newsletters."""
-    entries = get_all_entries(db)
+    limit = settings.max_entries_master_feed or None
+    entries = get_all_entries(db, limit=limit)
 
     feed_url = f"{settings.app_base_url}/feeds/all"
 

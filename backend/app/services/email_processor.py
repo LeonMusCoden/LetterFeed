@@ -230,7 +230,7 @@ def _process_single_email(
     move_folder = newsletter.move_to_folder or settings.move_to_folder
     if move_folder:
         logger.debug(f"Moving email with id={num} to {move_folder}")
-        mail.copy(num, move_folder)
+        mail.copy(num, f'"{move_folder}"')
         mail.store(num, "+FLAGS", "\\Deleted")
 
 

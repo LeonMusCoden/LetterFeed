@@ -17,5 +17,6 @@ class Settings(Base):
     mark_as_read = Column(Boolean, default=False)
     email_check_interval = Column(Integer, default=15)  # Interval in minutes
     auto_add_new_senders = Column(Boolean, default=False)
+    max_entries_per_feed = Column(Integer, default=0)
     auth_username = Column(String, nullable=True)
     auth_password_hash = Column(String, nullable=True)
