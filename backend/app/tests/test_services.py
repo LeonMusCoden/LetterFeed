@@ -14,6 +14,11 @@ from app.services.feed_generator import generate_feed, generate_master_feed
 
 def test_generate_master_feed(db_session: Session):
     """Test the master feed generation for all newsletters."""
+    create_or_update_settings(
+        db_session,
+        SettingsCreate(imap_server="test.com", imap_username="test", imap_password="pw"),
+    )
+
     # Create newsletters and entries
     nl1 = create_newsletter(
         db_session,

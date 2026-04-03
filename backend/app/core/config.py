@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     email_check_interval: int = 15
     auto_add_new_senders: bool = False
     max_entries_per_feed: int = 0
-    max_entries_master_feed: int = 0
     auth_username: str | None = None
     auth_password: str | None = None
     secret_key: str | None = Field(
