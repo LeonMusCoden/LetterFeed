@@ -1,8 +1,9 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from app.services.feed_generator import generate_master_feed
 from feedgen.feed import FeedGenerator
+
+from app.services.feed_generator import generate_master_feed
 
 
 @pytest.fixture
