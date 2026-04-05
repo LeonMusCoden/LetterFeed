@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     )
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
+    master_feed_limit: int = Field(
+        100,
+        validation_alias=AliasChoices(
+            "MASTER_FEED_LIMIT", "LETTERFEED_MASTER_FEED_LIMIT"
+        ),
+    )
 
 
 settings = Settings()

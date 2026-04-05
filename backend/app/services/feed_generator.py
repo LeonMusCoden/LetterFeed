@@ -77,7 +77,7 @@ def generate_feed(db: Session, feed_identifier: str):
 
 def generate_master_feed(db: Session):
     """Generate a master Atom feed for all newsletters."""
-    entries = get_all_entries(db)
+    entries = get_all_entries(db, limit=settings.master_feed_limit)
 
     feed_url = f"{settings.app_base_url}/feeds/all"
 
