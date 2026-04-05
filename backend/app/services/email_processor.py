@@ -1,6 +1,7 @@
 import email
 import imaplib
 import quopri
+import re
 from email.header import decode_header, make_header
 from email.message import Message
 
@@ -103,6 +104,10 @@ def _extract_and_clean_html(raw_html_content: str) -> dict[str, str]:
         # If quopri fails, assume it's already decoded.
         clean_html_str = raw_html_content
 
+    # Remove NULL bytes and other control characters that can cause lxml to fail.
+    # We keep tab (\x09), newline (\x0a), and carriage return (\x0d)
+    clean_html_str = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", clean_html_str)
+
     doc = Document(clean_html_str)
     extracted_body = doc.summary(html_partial=True)
 
@@ -203,10 +208,15 @@ def _process_single_email(
     received_at = email.utils.parsedate_to_datetime(date_str) if date_str else None
 
     if newsletter.extract_content:
-        cleaned_data = _extract_and_clean_html(body)
-        # The subject from the email itself is often better than what readability extracts
-        # so we only override the body.
-        body = cleaned_data["body"]
+        try:
+            cleaned_data = _extract_and_clean_html(body)
+            # The subject from the email itself is often better than what readability extracts
+            # so we only override the body.
+            body = cleaned_data["body"]
+        except Exception as e:
+            logger.warning(
+                f"Failed to extract content from email '{subject}' from {sender}: {e}. Using raw body."
+            )
 
     entry_schema = EntryCreate(
         subject=subject, body=body, message_id=message_id, received_at=received_at

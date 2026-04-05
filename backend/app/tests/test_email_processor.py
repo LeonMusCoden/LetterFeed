@@ -223,3 +223,58 @@ def test_process_single_email_with_encoded_from_header(db_session: Session):
     assert len(newsletters) == 1
     assert newsletters[0].name == "Кирилл"
     assert newsletters[0].senders[0].email == "test@example.com"
+
+
+def test_process_single_email_with_null_bytes_in_body(db_session: Session):
+    """Test that an email with NULL bytes in its body is handled gracefully.
+
+    - The NULL bytes should be stripped.
+    - Content extraction should still be attempted.
+    - If it fails, an error is logged and the raw body is used.
+    """
+    # 1. ARRANGE
+    settings_data = SettingsCreate(
+        imap_server="test.com", imap_username="test", imap_password="password"
+    )
+    newsletter_data = NewsletterCreate(
+        name="Test Newsletter",
+        sender_emails=["test@example.com"],
+        extract_content=True,  # Important: we want to test the extraction path
+    )
+    settings = create_or_update_settings(db_session, settings_data)
+    newsletter = create_newsletter(db_session, newsletter_data)
+
+    mock_mail = MagicMock(spec=imaplib.IMAP4_SSL)
+    msg = Message()
+    msg["From"] = "test@example.com"
+    msg["Subject"] = "Test Email with NULLs"
+    msg["Message-ID"] = "<test-message-id-nulls>"
+    # The body contains NULL bytes that would cause readability-lxml to crash
+    body_with_nulls = "<html><body><p>Hello\x00 World</p></body></html>"
+    msg.set_payload(body_with_nulls, "utf-8")
+    mock_mail.fetch.return_value = ("OK", [(b"1 (RFC822)", msg.as_bytes())])
+
+    sender_map = {newsletter.senders[0].email: newsletter}
+
+    # 2. ACT & ASSERT
+    with (
+        patch("app.services.email_processor.logger") as mock_logger,
+        patch("app.services.email_processor.create_entry") as mock_create_entry,
+    ):
+        # We mock readability.Document to simulate a failure *after* our sanitization
+        # to ensure the try/except block is also working.
+        with patch("app.services.email_processor.Document") as mock_document:
+            mock_document.side_effect = ValueError("Simulated lxml failure")
+            _process_single_email("1", mock_mail, db_session, sender_map, settings)
+
+            # Assert that the logger was called with a warning
+            mock_logger.warning.assert_called_once()
+            assert "Failed to extract content" in mock_logger.warning.call_args[0][0]
+
+        # Check that an entry was still created
+        mock_create_entry.assert_called_once()
+        entry_create_arg = mock_create_entry.call_args[0][1]
+
+        # The body should be the original (but decoded) body, since extraction failed
+        # Note: _get_email_body will decode the payload.
+        assert "Hello\x00 World" in entry_create_arg.body
