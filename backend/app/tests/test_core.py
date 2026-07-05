@@ -3,7 +3,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 from sqlalchemy.orm import Session
 
-from app.core.imap import _test_imap_connection, get_folders
+from app.core.imap import _test_imap_connection, get_folders, send_client_id
 from app.crud.newsletters import create_newsletter
 from app.crud.settings import create_or_update_settings
 from app.schemas.newsletters import NewsletterCreate
@@ -43,6 +43,18 @@ def test_get_folders(mock_imap):
     assert folders == ["INBOX", "Processed"]
 
 
+def test_send_client_id_registers_and_sends_imap_id_command():
+    """Test sending IMAP client identity for providers that require it."""
+    mock_mail = MagicMock()
+    mock_mail._simple_command.return_value = ("OK", [b"ID completed"])
+
+    send_client_id(mock_mail)
+
+    mock_mail._simple_command.assert_called_once_with(
+        "ID", '("name" "LetterFeed" "version" "0.4.0" "vendor" "LetterFeed")'
+    )
+
+
 @patch("app.services.email_processor.imaplib.IMAP4_SSL")
 def test_process_emails(mock_imap, db_session: Session):
     """Test processing emails."""
@@ -78,6 +90,9 @@ def test_process_emails(mock_imap, db_session: Session):
 
     # Assertions
     mock_mail.login.assert_called_once_with("test@test.com", "password")
+    mock_mail._simple_command.assert_called_once_with(
+        "ID", '("name" "LetterFeed" "version" "0.4.0" "vendor" "LetterFeed")'
+    )
     mock_mail.select.assert_called_once_with("INBOX")
     mock_mail.search.assert_called_once_with(None, "(UNSEEN)")
     mock_mail.fetch.assert_called_once_with(b"1", "(BODY.PEEK[])")
