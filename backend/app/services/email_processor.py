@@ -514,6 +514,30 @@ def process_emails(db: Session) -> None:
 
             purge_old_entries(db)
 
+        # Pre-warm feed caches for instant RSS reader responses
+        try:
+            from app.crud.entries import get_latest_entry_timestamp_cached
+            from app.crud.feed_cache import set_cached_feed
+            from app.routers.feeds import _generate_etag
+            from app.services.feed_generator import generate_feed, generate_master_feed
+
+            master_ts = get_latest_entry_timestamp_cached(db)
+            master_etag = _generate_etag("master", master_ts)
+            master_content = generate_master_feed(db)
+            if master_content:
+                set_cached_feed(db, "master", master_etag, master_content)
+
+            for nl in get_newsletters(db):
+                nl_ts = get_latest_entry_timestamp_cached(db, newsletter_id=nl.id)
+                nl_etag = _generate_etag(nl.id, nl_ts)
+                nl_content = generate_feed(
+                    db, nl.id, limit=env_settings.newsletter_feed_limit
+                )
+                if nl_content:
+                    set_cached_feed(db, nl.id, nl_etag, nl_content)
+        except Exception as e:
+            logger.warning(f"Failed to pre-warm feed cache after email processing: {e}")
+
         logger.info("Email processing finished successfully.")
     finally:
         _processing_lock.release()

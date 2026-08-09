@@ -248,3 +248,87 @@ def test_secured_master_feed_304_makes_no_db_queries(
         res = client.get(f"/feeds/all?token={token}", headers={"If-None-Match": etag})
     assert res.status_code == 304
     assert statements == [], f"secured 304 path issued DB queries: {statements}"
+
+
+def test_304_response_headers(client: TestClient, db_session: Session):
+    """Test that HTTP 304 Not Modified responses include standard caching headers."""
+    unique_email = f"head_test_{uuid.uuid4()}@example.com"
+    create_response = client.post(
+        "/newsletters", json={"name": "Header Test NL", "sender_emails": [unique_email]}
+    )
+    newsletter_id = create_response.json()["id"]
+    client.post(
+        f"/newsletters/{newsletter_id}/entries",
+        json={
+            "subject": "Header Entry",
+            "body": "<p>Body</p>",
+            "message_id": f"<entry_{uuid.uuid4()}@test.com>",
+        },
+    )
+
+    resp_200 = client.get(f"/feeds/{newsletter_id}")
+    etag = resp_200.headers.get("ETag")
+    assert etag is not None
+
+    resp_304 = client.get(
+        f"/feeds/{newsletter_id}", headers={"If-None-Match": etag}
+    )
+    assert resp_304.status_code == 304
+    assert resp_304.headers.get("ETag") == etag
+    assert "public" in resp_304.headers.get("Cache-Control", "")
+    assert "stale-while-revalidate" in resp_304.headers.get("Cache-Control", "")
+    assert resp_304.headers.get("Vary") == "Accept-Encoding"
+    assert resp_304.headers.get("Last-Modified") is not None
+
+
+def test_head_method_support(client: TestClient, db_session: Session):
+    """Test that HTTP HEAD requests to feed endpoints succeed with empty body."""
+    unique_email = f"head_test_{uuid.uuid4()}@example.com"
+    create_response = client.post(
+        "/newsletters", json={"name": "HEAD Test NL", "sender_emails": [unique_email]}
+    )
+    newsletter_id = create_response.json()["id"]
+    client.post(
+        f"/newsletters/{newsletter_id}/entries",
+        json={
+            "subject": "HEAD Entry",
+            "body": "<p>Content</p>",
+            "message_id": f"<entry_{uuid.uuid4()}@test.com>",
+        },
+    )
+
+    # HEAD on individual feed
+    head_resp = client.head(f"/feeds/{newsletter_id}")
+    assert head_resp.status_code == 200
+    assert head_resp.content == b""
+    assert head_resp.headers.get("ETag") is not None
+    assert head_resp.headers.get("Content-Length") is not None
+
+    # HEAD on master feed
+    head_master = client.head("/feeds/all")
+    assert head_master.status_code == 200
+    assert head_master.content == b""
+    assert head_master.headers.get("ETag") is not None
+
+
+def test_xml_minification(client: TestClient, db_session: Session):
+    """Test that Atom feeds are served minified without pretty-printed indents."""
+    unique_email = f"minify_test_{uuid.uuid4()}@example.com"
+    create_response = client.post(
+        "/newsletters", json={"name": "Minify Test NL", "sender_emails": [unique_email]}
+    )
+    newsletter_id = create_response.json()["id"]
+    client.post(
+        f"/newsletters/{newsletter_id}/entries",
+        json={
+            "subject": "Minify Entry",
+            "body": "<p>Content</p>",
+            "message_id": f"<entry_{uuid.uuid4()}@test.com>",
+        },
+    )
+
+    resp = client.get(f"/feeds/{newsletter_id}")
+    assert resp.status_code == 200
+    # Pretty-printed XML includes leading spaces for indentation (e.g. "  <title>")
+    assert "\n  <title>" not in resp.text
+

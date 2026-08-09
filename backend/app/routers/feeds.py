@@ -26,17 +26,12 @@ def _generate_etag(identifier: str, timestamp: datetime | None) -> str:
     """Generate an ETag from the feed identity, latest entry timestamp, and metadata.
 
     The newsletter-metadata version is folded in so renames/sender edits/deletes
-    (which don't advance the latest timestamp) still change the ETag. When
-    retention is enabled, the current UTC date is included so a feed whose
-    membership changes only because entries age out still refreshes at least
-    daily.
+    (which don't advance the latest timestamp) still change the ETag.
     """
     # isoformat is timezone-independent; .timestamp() on a naive datetime would
     # assume the server's local timezone and change the ETag across environments.
     ts_str = timestamp.isoformat() if timestamp else "empty"
     parts = [identifier, ts_str, get_metadata_version()]
-    if settings.feed_retention_days is not None:
-        parts.append(datetime.now(UTC).date().isoformat())
     etag_raw = "-".join(parts)
     return f'"{hashlib.md5(etag_raw.encode()).hexdigest()}"'
 
@@ -72,7 +67,11 @@ def _not_modified(
 
 def _feed_headers(etag: str, latest_timestamp: datetime | None) -> dict[str, str]:
     """Build the response headers common to every feed response."""
-    headers = {"ETag": etag, "Cache-Control": "public, max-age=60"}
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
+        "Vary": "Accept-Encoding",
+    }
     if latest_timestamp:
         headers["Last-Modified"] = format_datetime(
             _to_utc(latest_timestamp), usegmt=True
@@ -87,31 +86,40 @@ def _conditional_feed_response(
     if_none_match: str | None,
     if_modified_since: str | None,
     generate_fn: Callable[[], str | bytes | None],
+    is_head: bool = False,
 ) -> Response:
     """Serve a feed with ETag/If-Modified-Since handling and DB/memory caching."""
     etag = _generate_etag(cache_key, latest_timestamp)
-
-    if _not_modified(latest_timestamp, etag, if_none_match, if_modified_since):
-        return Response(status_code=304)
-
     headers = _feed_headers(etag, latest_timestamp)
 
+    if _not_modified(latest_timestamp, etag, if_none_match, if_modified_since):
+        return Response(status_code=304, headers=headers)
+
     cached_feed = get_cached_feed(db, cache_key, etag)
-    if cached_feed is not None:
-        logger.info(f"Returning cached feed for {cache_key}")
+    if cached_feed is None:
+        feed = generate_fn()
+        if not feed:
+            raise HTTPException(status_code=404, detail="Newsletter not found")
+        set_cached_feed(db, cache_key, etag, feed)
+        cached_feed = feed
+
+    if is_head:
+        content_bytes = (
+            cached_feed.encode("utf-8")
+            if isinstance(cached_feed, str)
+            else cached_feed
+        )
+        headers["Content-Length"] = str(len(content_bytes))
         return Response(
-            content=cached_feed, media_type="application/atom+xml", headers=headers
+            content=b"", media_type="application/atom+xml", headers=headers
         )
 
-    feed = generate_fn()
-    if not feed:
-        raise HTTPException(status_code=404, detail="Newsletter not found")
-
-    set_cached_feed(db, cache_key, etag, feed)
-    return Response(content=feed, media_type="application/atom+xml", headers=headers)
+    return Response(
+        content=cached_feed, media_type="application/atom+xml", headers=headers
+    )
 
 
-@router.get("/feeds/all")
+@router.api_route("/feeds/all", methods=["GET", "HEAD"])
 def get_master_feed(
     request: Request,
     token: str | None = None,
@@ -147,10 +155,11 @@ def get_master_feed(
         if_none_match,
         if_modified_since,
         lambda: generate_master_feed(db, request=request),
+        is_head=(request.method == "HEAD"),
     )
 
 
-@router.get("/feeds/{feed_identifier}")
+@router.api_route("/feeds/{feed_identifier}", methods=["GET", "HEAD"])
 def get_newsletter_feed(
     feed_identifier: str,
     request: Request,
@@ -200,4 +209,5 @@ def get_newsletter_feed(
             request=request,
             limit=settings.newsletter_feed_limit,
         ),
+        is_head=(request.method == "HEAD"),
     )

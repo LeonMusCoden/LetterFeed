@@ -140,7 +140,7 @@ def generate_feed(
 
     _add_entries_to_feed(fg, entries)
 
-    return fg.atom_str(pretty=True)
+    return fg.atom_str(pretty=False)
 
 
 def generate_master_feed(
@@ -164,4 +164,4 @@ def generate_master_feed(
 
     _add_entries_to_feed(fg, entries, is_master_feed=True)
 
-    return fg.atom_str(pretty=True)
+    return fg.atom_str(pretty=False)
