@@ -225,6 +225,34 @@ def test_process_single_email_with_encoded_from_header(db_session: Session):
     assert newsletters[0].senders[0].email == "test@example.com"
 
 
+def test_process_single_email_generates_slug_for_auto_added_newsletter(
+    db_session: Session,
+):
+    """Test deriving a slug from an auto-detected newsletter name."""
+    settings_data = SettingsCreate(
+        imap_server="test.com",
+        imap_username="test",
+        imap_password="password",
+        auto_add_new_senders=True,
+    )
+    settings = create_or_update_settings(db_session, settings_data)
+
+    mock_mail = MagicMock(spec=imaplib.IMAP4_SSL)
+    msg = Message()
+    msg["From"] = "The Daily & Weekly <daily-weekly@example.com>"
+    msg["Subject"] = "Test Email"
+    msg["Message-ID"] = "<test-message-id-generated-slug>"
+    msg.set_payload("<html><body><p>Body</p></body></html>", "utf-8")
+    mock_mail.fetch.return_value = ("OK", [(b"1 (RFC822)", msg.as_bytes())])
+
+    sender_map = {}
+    _process_single_email("1", mock_mail, db_session, sender_map, settings)
+
+    newsletter = sender_map["daily-weekly@example.com"]
+    assert newsletter.name == "The Daily & Weekly"
+    assert newsletter.slug == "the-daily-weekly"
+
+
 def test_process_single_email_with_null_bytes_in_body(db_session: Session):
     """Test that an email with NULL bytes in its body is handled gracefully.
 

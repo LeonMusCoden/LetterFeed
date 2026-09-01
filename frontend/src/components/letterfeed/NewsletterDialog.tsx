@@ -142,13 +142,18 @@ export function NewsletterDialog({ newsletter, isOpen, folderOptions, onOpenChan
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="slug">Custom URL</Label>
+            <Label htmlFor="slug">Custom URL (optional)</Label>
             <Input
               id="slug"
               value={formData.slug}
               onChange={(e) => setFormData((prev) => ({ ...prev, slug: e.target.value }))}
-              placeholder="my-custom-url"
+              placeholder={isEditMode ? "my-custom-url" : "Generated from newsletter name"}
             />
+            {!isEditMode && (
+              <p className="text-sm text-muted-foreground">
+                Leave blank to generate a URL from the newsletter name.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
