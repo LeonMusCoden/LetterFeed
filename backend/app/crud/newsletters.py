@@ -1,13 +1,16 @@
 from nanoid import generate
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.core.slug import slugify_name
 from app.models.entries import Entry
 from app.models.newsletters import Newsletter, Sender
 from app.schemas.newsletters import NewsletterCreate, NewsletterUpdate
 
 logger = get_logger(__name__)
+_RESERVED_FEED_SLUGS = {"all"}
 
 
 def get_newsletter_by_identifier(db: Session, identifier: str):
@@ -30,6 +33,37 @@ def get_newsletter_by_identifier(db: Session, identifier: str):
 def get_newsletter_by_slug(db: Session, slug: str):
     """Retrieve a newsletter by its slug."""
     return db.query(Newsletter).filter(Newsletter.slug == slug).first()
+
+
+def _slug_is_unavailable(
+    db: Session, slug: str, exclude_newsletter_id: str | None = None
+) -> bool:
+    """Check whether a slug would conflict with a feed route or identifier."""
+    if slug in _RESERVED_FEED_SLUGS:
+        return True
+
+    query = db.query(Newsletter.id).filter(
+        or_(Newsletter.slug == slug, Newsletter.id == slug)
+    )
+    if exclude_newsletter_id:
+        query = query.filter(Newsletter.id != exclude_newsletter_id)
+
+    return query.first() is not None
+
+
+def _generate_unique_slug(db: Session, name: str) -> str | None:
+    """Generate an available slug from a newsletter name."""
+    base_slug = slugify_name(name)
+    if not base_slug:
+        return None
+
+    candidate = base_slug
+    suffix = 2
+    while _slug_is_unavailable(db, candidate):
+        candidate = f"{base_slug}-{suffix}"
+        suffix += 1
+
+    return candidate
 
 
 def get_newsletters(db: Session, skip: int = 0, limit: int = 100):
@@ -57,19 +91,38 @@ def create_newsletter(db: Session, newsletter: NewsletterCreate):
     """Create a new newsletter."""
     logger.info(f"Creating new newsletter with name '{newsletter.name}'")
 
-    if newsletter.slug and get_newsletter_by_slug(db, newsletter.slug):
-        return None  # Indicates a conflict
+    if newsletter.slug:
+        if _slug_is_unavailable(db, newsletter.slug):
+            return None  # Indicates a conflict
+        slug = newsletter.slug
+    else:
+        slug = _generate_unique_slug(db, newsletter.name)
 
-    db_newsletter = Newsletter(
-        id=generate(size=10),
-        name=newsletter.name,
-        slug=newsletter.slug,
-        search_folder=newsletter.search_folder,
-        extract_content=newsletter.extract_content,
-        move_to_folder=newsletter.move_to_folder,
-    )
-    db.add(db_newsletter)
-    db.commit()
+    while True:
+        db_newsletter = Newsletter(
+            id=generate(size=10),
+            name=newsletter.name,
+            slug=slug,
+            search_folder=newsletter.search_folder,
+            extract_content=newsletter.extract_content,
+            move_to_folder=newsletter.move_to_folder,
+        )
+        db.add(db_newsletter)
+        try:
+            db.commit()
+            break
+        except IntegrityError:
+            db.rollback()
+            if newsletter.slug:
+                if _slug_is_unavailable(db, newsletter.slug):
+                    return None  # Indicates a conflict
+                raise
+
+            next_slug = _generate_unique_slug(db, newsletter.name)
+            if not next_slug or next_slug == slug:
+                raise
+            slug = next_slug
+
     db.refresh(db_newsletter)
 
     for email in newsletter.sender_emails:
@@ -93,10 +146,12 @@ def update_newsletter(
     if not db_newsletter:
         return None
 
-    if newsletter_update.slug:
-        existing_newsletter = get_newsletter_by_slug(db, newsletter_update.slug)
-        if existing_newsletter and existing_newsletter.id != newsletter_id:
-            return "conflict"  # Indicates a conflict
+    if (
+        newsletter_update.slug
+        and newsletter_update.slug != db_newsletter.slug
+        and _slug_is_unavailable(db, newsletter_update.slug, newsletter_id)
+    ):
+        return "conflict"  # Indicates a conflict
 
     update_data = newsletter_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
