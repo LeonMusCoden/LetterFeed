@@ -8,7 +8,7 @@ from app.core.imap import _test_imap_connection, get_folders
 from app.core.logging import get_logger
 from app.crud.settings import create_or_update_settings, get_settings
 from app.schemas.settings import Settings, SettingsCreate
-from app.services.email_processor import process_emails
+from app.services.email_processor import EmailProcessingError, process_emails
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -81,6 +81,9 @@ def trigger_email_processing(db: Session = Depends(get_db)):
     try:
         process_emails(db)
         return {"message": "Email processing triggered successfully."}
+    except EmailProcessingError as e:
+        logger.warning(f"Email processing failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error triggering email processing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

@@ -2,6 +2,7 @@ import imaplib
 from email.message import Message
 from unittest.mock import MagicMock, patch
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.crud.newsletters import create_newsletter
@@ -9,7 +10,11 @@ from app.crud.settings import create_or_update_settings
 from app.models.newsletters import Newsletter
 from app.schemas.newsletters import NewsletterCreate
 from app.schemas.settings import Settings, SettingsCreate
-from app.services.email_processor import _process_single_email, process_emails
+from app.services.email_processor import (
+    EmailProcessingError,
+    _process_single_email,
+    process_emails,
+)
 
 
 def _setup_test_email_processing(
@@ -107,7 +112,7 @@ def test_process_emails_uses_newsletter_search_folder(
     create_newsletter(db_session, newsletter_data)
 
     # Mock the return of _connect_to_imap to avoid a real IMAP connection
-    mock_connect_to_imap.return_value = None
+    mock_connect_to_imap.return_value.search.return_value = ("OK", [b""])
 
     # 2. ACT
     process_emails(db_session)
@@ -141,7 +146,7 @@ def test_process_emails_uses_global_search_folder(
     )
     create_newsletter(db_session, newsletter_data)
 
-    mock_connect_to_imap.return_value = None
+    mock_connect_to_imap.return_value.search.return_value = ("OK", [b""])
 
     # 2. ACT
     process_emails(db_session)
@@ -278,3 +283,80 @@ def test_process_single_email_with_null_bytes_in_body(db_session: Session):
         # The body should be the original (but decoded) body, since extraction failed
         # Note: _get_email_body will decode the payload.
         assert "Hello\x00 World" in entry_create_arg.body
+
+
+def _create_settings_and_newsletters(db_session: Session, folders: list[str]) -> None:
+    """Create IMAP settings and one newsletter per search folder."""
+    create_or_update_settings(
+        db_session,
+        SettingsCreate(
+            imap_server="imap.test.com",
+            imap_username="user@test.com",
+            imap_password="secret-password",
+            search_folder="INBOX",
+        ),
+    )
+    for i, folder in enumerate(folders):
+        create_newsletter(
+            db_session,
+            NewsletterCreate(
+                name=f"Newsletter {i}",
+                sender_emails=[f"sender{i}@example.com"],
+                search_folder=folder,
+            ),
+        )
+
+
+@patch("app.services.email_processor.connect_imap")
+def test_process_emails_reports_connection_error(mock_connect_imap, db_session):
+    """Test that a connection error is raised once, without the password."""
+    _create_settings_and_newsletters(db_session, ["INBOX", "Newsletters"])
+    mock_connect_imap.side_effect = ConnectionError(
+        "TLS certificate verification failed for imap.test.com: self-signed certificate"
+    )
+
+    with pytest.raises(EmailProcessingError) as exc_info:
+        process_emails(db_session)
+
+    message = str(exc_info.value)
+    assert message == (
+        "Could not connect to IMAP server: TLS certificate verification failed "
+        "for imap.test.com: self-signed certificate"
+    )
+    assert "secret-password" not in message
+    assert mock_connect_imap.call_count == 2
+
+
+@patch("app.services.email_processor.connect_imap")
+def test_process_emails_reports_login_error(mock_connect_imap, db_session):
+    """Test that an IMAP login error is reported as readable text."""
+    _create_settings_and_newsletters(db_session, ["INBOX"])
+    mock_connect_imap.return_value.login.side_effect = imaplib.IMAP4.error(
+        b"[AUTHENTICATIONFAILED] Invalid credentials"
+    )
+
+    with pytest.raises(EmailProcessingError) as exc_info:
+        process_emails(db_session)
+
+    assert str(exc_info.value) == (
+        "Could not connect to IMAP server: [AUTHENTICATIONFAILED] Invalid credentials"
+    )
+
+
+@patch("app.services.email_processor.connect_imap")
+def test_process_emails_reports_missing_folder_and_continues(
+    mock_connect_imap, db_session
+):
+    """Test that a failing folder is reported and the other folders are processed."""
+    _create_settings_and_newsletters(db_session, ["Missing", "INBOX"])
+    mock_mail = mock_connect_imap.return_value
+    mock_mail.select.side_effect = lambda folder: (
+        ("NO", [b"Mailbox does not exist"]) if folder == "Missing" else ("OK", [b"0"])
+    )
+    mock_mail.search.return_value = ("OK", [b""])
+
+    with pytest.raises(EmailProcessingError) as exc_info:
+        process_emails(db_session)
+
+    assert str(exc_info.value) == "Could not select IMAP folder 'Missing'"
+    mock_mail.search.assert_called_once()

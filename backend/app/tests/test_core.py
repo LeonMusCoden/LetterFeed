@@ -14,7 +14,7 @@ from app.crud.newsletters import create_newsletter
 from app.crud.settings import create_or_update_settings
 from app.schemas.newsletters import NewsletterCreate
 from app.schemas.settings import SettingsCreate
-from app.services.email_processor import process_emails
+from app.services.email_processor import EmailProcessingError, process_emails
 
 
 @patch("app.core.imap.imaplib.IMAP4_SSL")
@@ -198,6 +198,23 @@ def test_scheduler_job(mock_process_emails, mock_session_local, db_session: Sess
 
     job()
     mock_process_emails.assert_called_once_with(db_session)
+
+
+@patch("app.core.scheduler.logger")
+@patch("app.core.scheduler.SessionLocal")
+@patch("app.core.scheduler.process_emails")
+def test_scheduler_job_email_processing_error(
+    mock_process_emails, mock_session_local, mock_logger, db_session: Session
+):
+    """Test that the scheduler job logs email processing errors."""
+    mock_session_local.return_value = db_session
+    mock_process_emails.side_effect = EmailProcessingError("Could not connect")
+    from app.core.scheduler import job
+
+    job()
+    mock_logger.warning.assert_called_once_with(
+        "Scheduled email processing failed: Could not connect"
+    )
 
 
 @patch("app.services.email_processor.imaplib.IMAP4_SSL")

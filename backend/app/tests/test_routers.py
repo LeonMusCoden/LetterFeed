@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.crud.settings import create_or_update_settings
 from app.schemas.settings import SettingsCreate
+from app.services.email_processor import EmailProcessingError
 
 
 def test_health_check(client: TestClient):
@@ -105,6 +106,19 @@ def test_trigger_email_processing(mock_process_emails, client: TestClient):
     assert response.status_code == 200
     assert response.json() == {"message": "Email processing triggered successfully."}
     mock_process_emails.assert_called_once()
+
+
+@patch("app.routers.imap.process_emails")
+def test_trigger_email_processing_error(mock_process_emails, client: TestClient):
+    """Test that an email processing error is returned to the client."""
+    mock_process_emails.side_effect = EmailProcessingError(
+        "Could not connect to IMAP server: [AUTHENTICATIONFAILED] Invalid credentials"
+    )
+    response = client.post("/imap/process")
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Could not connect to IMAP server: [AUTHENTICATIONFAILED] Invalid credentials"
+    }
 
 
 def test_create_newsletter(client: TestClient):
