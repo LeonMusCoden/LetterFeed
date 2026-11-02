@@ -1,9 +1,15 @@
+import ssl
 from datetime import datetime
 from unittest.mock import ANY, MagicMock, patch
 
 from sqlalchemy.orm import Session
 
-from app.core.imap import _test_imap_connection, get_folders, send_client_id
+from app.core.imap import (
+    _test_imap_connection,
+    connect_imap,
+    get_folders,
+    send_client_id,
+)
 from app.crud.newsletters import create_newsletter
 from app.crud.settings import create_or_update_settings
 from app.schemas.newsletters import NewsletterCreate
@@ -41,6 +47,40 @@ def test_get_folders(mock_imap):
     )
     folders = get_folders("imap.test.com", "user", "pass")
     assert folders == ["INBOX", "Processed"]
+
+
+@patch("app.core.imap.imaplib.IMAP4_SSL")
+def test_connect_imap_verifies_certificate(mock_imap):
+    """Test that IMAP connections verify the server certificate and hostname."""
+    connect_imap("imap.test.com")
+    context = mock_imap.call_args.kwargs["ssl_context"]
+    assert mock_imap.call_args.args == ("imap.test.com",)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname
+
+
+@patch("app.core.imap.env_settings")
+@patch("app.core.imap.imaplib.IMAP4_SSL")
+def test_connect_imap_insecure_opt_out(mock_imap, mock_env_settings):
+    """Test that certificate verification can be disabled explicitly."""
+    mock_env_settings.imap_tls_insecure = True
+    connect_imap("imap.test.com")
+    context = mock_imap.call_args.kwargs["ssl_context"]
+    assert context.verify_mode == ssl.CERT_NONE
+    assert not context.check_hostname
+
+
+@patch("app.core.imap.imaplib.IMAP4_SSL")
+def test_test_imap_connection_certificate_error(mock_imap):
+    """Test that a certificate verification error is reported."""
+    error = ssl.SSLCertVerificationError("certificate verify failed")
+    error.verify_message = "self-signed certificate"
+    mock_imap.side_effect = error
+    success, message = _test_imap_connection("imap.test.com", "user", "pass")
+    assert not success
+    assert "TLS certificate verification failed for imap.test.com" in message
+    assert "self-signed certificate" in message
+    assert "LETTERFEED_IMAP_TLS_INSECURE" in message
 
 
 def test_send_client_id_registers_and_sends_imap_id_command():

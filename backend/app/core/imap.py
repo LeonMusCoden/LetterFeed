@@ -1,10 +1,38 @@
 import imaplib
+import ssl
 
+from app.core.config import settings as env_settings
 from app.core.logging import get_logger
 
 """IMAP utility functions for connecting to mail servers and fetching folders."""
 
 logger = get_logger(__name__)
+
+
+def imap_ssl_context() -> ssl.SSLContext:
+    """Return the TLS context used for IMAP connections.
+
+    The server certificate and hostname are verified against the system CA store,
+    unless LETTERFEED_IMAP_TLS_INSECURE is enabled.
+    """
+    if env_settings.imap_tls_insecure:
+        logger.warning(
+            "LETTERFEED_IMAP_TLS_INSECURE is enabled: the IMAP server certificate is not verified"
+        )
+        return ssl._create_unverified_context()
+    return ssl.create_default_context()
+
+
+def connect_imap(server: str) -> imaplib.IMAP4_SSL:
+    """Open an IMAP over TLS connection with certificate verification."""
+    try:
+        return imaplib.IMAP4_SSL(server, ssl_context=imap_ssl_context())
+    except ssl.SSLCertVerificationError as e:
+        reason = str(e.verify_message or e).rstrip(".")
+        raise ConnectionError(
+            f"TLS certificate verification failed for {server}: {reason}. "
+            "If the server uses a self-signed certificate, set LETTERFEED_IMAP_TLS_INSECURE=true."
+        ) from e
 
 
 def send_client_id(mail: imaplib.IMAP4_SSL) -> None:
@@ -22,7 +50,7 @@ def _test_imap_connection(server, username, password):
     """Test the IMAP connection with the given credentials."""
     logger.info(f"Testing IMAP connection to {server} for user {username}")
     try:
-        mail = imaplib.IMAP4_SSL(server)
+        mail = connect_imap(server)
         mail.login(username, password)
         send_client_id(mail)
         mail.logout()
@@ -37,7 +65,7 @@ def get_folders(server, username, password):
     """Fetch a list of IMAP folders from the mail server."""
     logger.info(f"Fetching IMAP folders from {server} for user {username}")
     try:
-        mail = imaplib.IMAP4_SSL(server)
+        mail = connect_imap(server)
         mail.login(username, password)
         send_client_id(mail)
         status, folders = mail.list()

@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from readability import Document
 from sqlalchemy.orm import Session
 
-from app.core.imap import send_client_id
+from app.core.imap import connect_imap, send_client_id
 from app.core.logging import get_logger
 from app.crud.entries import create_entry, get_entry_by_message_id
 from app.crud.newsletters import create_newsletter, get_newsletters
@@ -42,7 +42,7 @@ def _connect_to_imap(
     """Connect to the IMAP server and select the mailbox."""
     try:
         logger.info(f"Connecting to IMAP server: {settings.imap_server}")
-        mail = imaplib.IMAP4_SSL(settings.imap_server)
+        mail = connect_imap(settings.imap_server)
         mail.login(settings.imap_username, settings.imap_password)
         send_client_id(mail)
         status, messages = mail.select(search_folder)
