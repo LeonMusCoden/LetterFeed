@@ -12,7 +12,7 @@ It periodically scans your email inbox via IMAP for new emails from the senders 
 
 ### Prerequisites
 
-1. An existing mailbox with IMAP over SSL on port 993.
+1. An existing mailbox with IMAP over SSL on port 993. The server's TLS certificate is verified; for a server with a self-signed certificate, set `LETTERFEED_IMAP_TLS_INSECURE=true` (this disables certificate verification).
 2. Docker and Docker Compose installed on your system.
 
 ### Installation

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     imap_server: str = ""
     imap_username: str = ""
     imap_password: str = ""
+    imap_tls_insecure: bool = False
     search_folder: str = "INBOX"
     move_to_folder: str | None = None
     mark_as_read: bool = False

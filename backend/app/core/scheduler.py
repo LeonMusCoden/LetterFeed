@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.database import SessionLocal
 from app.core.logging import get_logger
 from app.crud.settings import get_settings
-from app.services.email_processor import process_emails
+from app.services.email_processor import EmailProcessingError, process_emails
 
 """Scheduler for background tasks like email processing."""
 
@@ -19,6 +19,8 @@ def job():
     try:
         process_emails(db)
         logger.info("Scheduler job finished: process_emails")
+    except EmailProcessingError as e:
+        logger.warning(f"Scheduled email processing failed: {e}")
     except Exception as e:
         logger.error(f"Error in scheduled job process_emails: {e}", exc_info=True)
     finally:

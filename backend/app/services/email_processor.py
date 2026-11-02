@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from readability import Document
 from sqlalchemy.orm import Session
 
-from app.core.imap import send_client_id
+from app.core.imap import connect_imap, send_client_id
 from app.core.logging import get_logger
 from app.crud.entries import create_entry, get_entry_by_message_id
 from app.crud.newsletters import create_newsletter, get_newsletters
@@ -21,6 +21,17 @@ from app.schemas.newsletters import NewsletterCreate
 from app.schemas.settings import Settings
 
 logger = get_logger(__name__)
+
+
+class EmailProcessingError(Exception):
+    """Raised when emails could not be fetched from the IMAP server."""
+
+
+def _error_message(error: Exception) -> str:
+    """Return a readable message for an IMAP or connection error."""
+    if error.args and isinstance(error.args[0], bytes):
+        return error.args[0].decode("utf-8", "replace")
+    return str(error) or type(error).__name__
 
 
 def _is_configured(settings: Settings | None) -> bool:
@@ -36,27 +47,32 @@ def _is_configured(settings: Settings | None) -> bool:
     return True
 
 
-def _connect_to_imap(
-    settings: Settings, search_folder: str
-) -> imaplib.IMAP4_SSL | None:
-    """Connect to the IMAP server and select the mailbox."""
+def _connect_to_imap(settings: Settings, search_folder: str) -> imaplib.IMAP4_SSL:
+    """Connect to the IMAP server and select the mailbox.
+
+    Raises:
+        EmailProcessingError: If the connection, the login or selecting the
+            mailbox fails.
+    """
     try:
         logger.info(f"Connecting to IMAP server: {settings.imap_server}")
-        mail = imaplib.IMAP4_SSL(settings.imap_server)
+        mail = connect_imap(settings.imap_server)
         mail.login(settings.imap_username, settings.imap_password)
         send_client_id(mail)
         status, messages = mail.select(search_folder)
-        if status != "OK":
-            logger.error(
-                f"Failed to select mailbox: {search_folder}, status: {status}, messages: {messages}"
-            )
-            mail.logout()
-            return None
-        logger.info(f"Selected mailbox: {search_folder}")
-        return mail
     except Exception as e:
         logger.error(f"Failed to connect to IMAP server: {e}", exc_info=True)
-        return None
+        raise EmailProcessingError(
+            f"Could not connect to IMAP server: {_error_message(e)}"
+        ) from e
+    if status != "OK":
+        logger.error(
+            f"Failed to select mailbox: {search_folder}, status: {status}, messages: {messages}"
+        )
+        mail.logout()
+        raise EmailProcessingError(f"Could not select IMAP folder '{search_folder}'")
+    logger.info(f"Selected mailbox: {search_folder}")
+    return mail
 
 
 def _fetch_unread_email_ids(mail: imaplib.IMAP4_SSL) -> list[str]:
@@ -247,7 +263,12 @@ def _process_single_email(
 
 
 def process_emails(db: Session) -> None:
-    """Process unread emails, add them as entries, and manage newsletters."""
+    """Process unread emails, add them as entries, and manage newsletters.
+
+    Raises:
+        EmailProcessingError: If one or more folders could not be processed.
+            All other folders are still processed.
+    """
     logger.info("Starting email processing...")
     settings = get_settings(db, with_password=True)
     if not _is_configured(settings):
@@ -268,6 +289,7 @@ def process_emails(db: Session) -> None:
     if settings.auto_add_new_senders and settings.search_folder not in folder_groups:
         folder_groups[settings.search_folder] = []
 
+    errors: list[str] = []
     for search_folder, newsletters_in_folder in folder_groups.items():
         logger.info(
             f"Processing folder '{search_folder}' for {len(newsletters_in_folder)} newsletters."
@@ -276,11 +298,11 @@ def process_emails(db: Session) -> None:
             sender.email: nl for nl in newsletters_in_folder for sender in nl.senders
         }
 
-        mail = _connect_to_imap(settings, search_folder)
-        if not mail:
-            logger.warning(
-                f"Skipping folder '{search_folder}' due to connection issue."
-            )
+        try:
+            mail = _connect_to_imap(settings, search_folder)
+        except EmailProcessingError as e:
+            logger.warning(f"Skipping folder '{search_folder}': {e}")
+            errors.append(str(e))
             continue
 
         try:
@@ -307,7 +329,15 @@ def process_emails(db: Session) -> None:
                 f"Error processing emails in folder '{search_folder}': {e}",
                 exc_info=True,
             )
+            errors.append(
+                f"Error processing folder '{search_folder}': {_error_message(e)}"
+            )
         finally:
             mail.logout()
+
+    if errors:
+        # Report every distinct problem once, e.g. a connection error that
+        # occurred for several folders.
+        raise EmailProcessingError("; ".join(dict.fromkeys(errors)))
 
     logger.info("Email processing finished successfully.")
