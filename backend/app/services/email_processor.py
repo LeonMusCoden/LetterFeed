@@ -8,6 +8,7 @@ from email.message import Message
 import nh3
 from bs4 import BeautifulSoup
 from readability import Document
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.imap import send_client_id
@@ -15,12 +16,19 @@ from app.core.logging import get_logger
 from app.crud.entries import create_entry, get_entry_by_message_id
 from app.crud.newsletters import create_newsletter, get_newsletters
 from app.crud.settings import get_settings
-from app.models.newsletters import Newsletter
+from app.models.newsletters import Newsletter, Sender
 from app.schemas.entries import EntryCreate
 from app.schemas.newsletters import NewsletterCreate
 from app.schemas.settings import Settings
 
 logger = get_logger(__name__)
+
+# IMAP socket timeout (seconds). Without it a stalled read blocks forever and
+# the scheduled job never returns, so every later run is skipped.
+_IMAP_TIMEOUT_SECONDS = 60
+
+# Page size used to iterate over every newsletter row.
+_NEWSLETTER_PAGE_SIZE = 100
 
 
 def _is_configured(settings: Settings | None) -> bool:
@@ -42,7 +50,9 @@ def _connect_to_imap(
     """Connect to the IMAP server and select the mailbox."""
     try:
         logger.info(f"Connecting to IMAP server: {settings.imap_server}")
-        mail = imaplib.IMAP4_SSL(settings.imap_server)
+        mail = imaplib.IMAP4_SSL(
+            settings.imap_server, timeout=_IMAP_TIMEOUT_SECONDS
+        )
         mail.login(settings.imap_username, settings.imap_password)
         send_client_id(mail)
         status, messages = mail.select(search_folder)
@@ -149,13 +159,89 @@ def _extract_and_clean_html(raw_html_content: str) -> dict[str, str]:
     return {"title": title, "body": cleaned_body}
 
 
+def _get_all_newsletters(db: Session) -> list[Newsletter]:
+    """Return every newsletter, paginating through the table.
+
+    The crud helper defaults to `limit=100`. With more rows than that, senders
+    outside the window were treated as new and the auto-add aborted the batch
+    with a UNIQUE constraint failure.
+    """
+    all_nl: list[Newsletter] = []
+    skip = 0
+    while True:
+        page = get_newsletters(db, skip=skip, limit=_NEWSLETTER_PAGE_SIZE)
+        if not page:
+            break
+        all_nl.extend(page)
+        if len(page) < _NEWSLETTER_PAGE_SIZE:
+            break
+        skip += _NEWSLETTER_PAGE_SIZE
+    return all_nl
+
+
+def _find_newsletter_by_sender(db: Session, sender: str) -> Newsletter | None:
+    """Return the newsletter that owns a sender, if any.
+
+    Safety net for senders missing from the in-memory map (stale map or a
+    previous failure), so they are not auto-added twice.
+    """
+    row = db.query(Sender).filter(Sender.email == sender).first()
+    if not row:
+        return None
+    return db.query(Newsletter).filter(Newsletter.id == row.newsletter_id).first()
+
+
+def _cleanup_orphan_newsletters(db: Session, name: str, keep_id: str) -> None:
+    """Delete orphan newsletters with the same name and no entries.
+
+    `create_newsletter()` commits the newsletter before inserting its senders.
+    When that insert hits a UNIQUE constraint, the newsletter stays behind as an
+    orphan. Remove those rows so they do not pile up.
+    """
+    try:
+        orphans = (
+            db.query(Newsletter)
+            .filter(Newsletter.name == name, Newsletter.id != keep_id)
+            .all()
+        )
+        from app.models.entries import Entry
+
+        for nl in orphans:
+            n_entries = (
+                db.query(Entry).filter(Entry.newsletter_id == nl.id).count()
+            )
+            if n_entries == 0:
+                logger.warning(
+                    f"Removing orphan newsletter '{name}' id={nl.id} (no entries, "
+                    f"canonical kept: {keep_id})"
+                )
+                db.delete(nl)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Orphan cleanup for '{name}' failed (non-fatal): {e}")
+        db.rollback()
+
+
 def _auto_add_newsletter(
     db: Session,
     sender: str,
     msg: Message,
     settings: Settings,
-) -> Newsletter:
-    """Automatically add a new newsletter."""
+) -> Newsletter | None:
+    """Add a new newsletter, reusing an existing one when possible.
+
+    Return the existing newsletter if the sender is already registered. If the
+    insert still collides (race), roll back, reuse the existing row and clean up
+    the orphan. Return None only when neither path succeeds.
+    """
+    existing = _find_newsletter_by_sender(db, sender)
+    if existing:
+        logger.info(
+            f"Sender {sender} already owned by newsletter '{existing.name}' "
+            f"id={existing.id}, reusing (no auto-add)."
+        )
+        return existing
+
     logger.info(f"Auto-adding new newsletter for sender: {sender}")
     # Decode the 'From' header to handle non-ASCII characters in the sender's name
     from_header = str(make_header(decode_header(msg.get("From", ""))))
@@ -164,7 +250,22 @@ def _auto_add_newsletter(
         name=newsletter_name,
         sender_emails=[sender],
     )
-    return create_newsletter(db, new_newsletter_schema)
+    try:
+        return create_newsletter(db, new_newsletter_schema)
+    except IntegrityError:
+        db.rollback()
+        logger.warning(
+            f"Auto-add for {sender} collided (sender already registered); "
+            "reusing existing newsletter."
+        )
+        existing = _find_newsletter_by_sender(db, sender)
+        if existing:
+            _cleanup_orphan_newsletters(db, newsletter_name, existing.id)
+        return existing
+    except Exception:
+        db.rollback()
+        logger.error(f"Auto-add for {sender} failed.", exc_info=True)
+        return None
 
 
 def _process_single_email(
@@ -173,77 +274,98 @@ def _process_single_email(
     db: Session,
     sender_map: dict[str, Newsletter],
     settings: Settings,
-) -> None:
-    """Process a single email message."""
-    status, data = mail.fetch(num, "(BODY.PEEK[])")
-    if status != "OK":
-        logger.warning(f"Failed to fetch email with id={num}")
-        return
+) -> str:
+    """Process one email message, isolating failures.
 
-    msg = email.message_from_bytes(data[0][1])
-    sender = email.utils.parseaddr(msg["From"])[1]
-    message_id = msg.get("Message-ID")
+    Return "created", "skipped" or "failed". Exceptions never propagate: a
+    single malformed email is logged and the batch continues, so one bad message
+    cannot stall the whole mailbox.
+    """
+    try:
+        status, data = mail.fetch(num, "(BODY.PEEK[])")
+        if status != "OK":
+            logger.warning(f"Failed to fetch email with id={num}")
+            return "skipped"
 
-    if not message_id:
-        logger.warning(
-            f"Email from {sender} with subject '{msg['Subject']}' has no Message-ID, skipping."
-        )
-        return
+        msg = email.message_from_bytes(data[0][1])
+        sender = email.utils.parseaddr(msg["From"])[1]
+        message_id = msg.get("Message-ID")
 
-    if get_entry_by_message_id(db, message_id):
-        logger.info(f"Email with Message-ID {message_id} already processed, skipping.")
-        return
-
-    logger.debug(f"Processing email from {sender} with subject '{msg['Subject']}'")
-
-    newsletter = sender_map.get(sender)
-    if not newsletter and settings.auto_add_new_senders:
-        newsletter = _auto_add_newsletter(db, sender, msg, settings)
-        sender_map[sender] = newsletter
-
-    if not newsletter:
-        return
-
-    subject = str(make_header(decode_header(msg["Subject"])))
-    body = _get_email_body(msg)
-    date_str = msg["Date"]
-    received_at = email.utils.parsedate_to_datetime(date_str) if date_str else None
-
-    if newsletter.extract_content:
-        try:
-            cleaned_data = _extract_and_clean_html(body)
-            # The subject from the email itself is often better than what readability extracts
-            # so we only override the body.
-            body = cleaned_data["body"]
-        except Exception as e:
+        if not message_id:
             logger.warning(
-                f"Failed to extract content from email '{subject}' from {sender}: {e}. Using raw body."
+                f"Email from {sender} with subject '{msg['Subject']}' has no Message-ID, skipping."
             )
+            return "skipped"
 
-    entry_schema = EntryCreate(
-        subject=subject, body=body, message_id=message_id, received_at=received_at
-    )
-    new_entry = create_entry(db, entry_schema, newsletter.id)
+        if get_entry_by_message_id(db, message_id):
+            logger.info(f"Email with Message-ID {message_id} already processed, skipping.")
+            return "skipped"
 
-    if not new_entry:
-        logger.error(
-            f"Failed to create entry for newsletter '{newsletter.name}' from sender {sender}, email will not be marked as read or moved."
+        logger.debug(f"Processing email from {sender} with subject '{msg['Subject']}'")
+
+        newsletter = sender_map.get(sender)
+        if not newsletter:
+            # Fall back to the database when the in-memory map is stale.
+            newsletter = _find_newsletter_by_sender(db, sender)
+            if newsletter:
+                sender_map[sender] = newsletter
+        if not newsletter and settings.auto_add_new_senders:
+            newsletter = _auto_add_newsletter(db, sender, msg, settings)
+            if newsletter:
+                sender_map[sender] = newsletter
+
+        if not newsletter:
+            return "skipped"
+
+        subject = str(make_header(decode_header(msg["Subject"])))
+        body = _get_email_body(msg)
+        date_str = msg["Date"]
+        received_at = email.utils.parsedate_to_datetime(date_str) if date_str else None
+
+        if newsletter.extract_content:
+            try:
+                cleaned_data = _extract_and_clean_html(body)
+                # The subject from the email itself is often better than what readability extracts
+                # so we only override the body.
+                body = cleaned_data["body"]
+            except Exception as e:
+                logger.warning(
+                    f"Failed to extract content from email '{subject}' from {sender}: {e}. Using raw body."
+                )
+
+        entry_schema = EntryCreate(
+            subject=subject, body=body, message_id=message_id, received_at=received_at
         )
-        return
+        new_entry = create_entry(db, entry_schema, newsletter.id)
 
-    logger.info(
-        f"Created new entry for newsletter '{newsletter.name}' from sender {sender}"
-    )
+        if not new_entry:
+            logger.error(
+                f"Failed to create entry for newsletter '{newsletter.name}' from sender {sender}, email will not be marked as read or moved."
+            )
+            return "failed"
 
-    if settings.mark_as_read:
-        logger.debug(f"Marking email with id={num} as read")
-        mail.store(num, "+FLAGS", "\\Seen")
+        logger.info(
+            f"Created new entry for newsletter '{newsletter.name}' from sender {sender}"
+        )
 
-    move_folder = newsletter.move_to_folder or settings.move_to_folder
-    if move_folder:
-        logger.debug(f"Moving email with id={num} to {move_folder}")
-        mail.copy(num, move_folder)
-        mail.store(num, "+FLAGS", "\\Deleted")
+        if settings.mark_as_read:
+            logger.debug(f"Marking email with id={num} as read")
+            mail.store(num, "+FLAGS", "\\Seen")
+
+        move_folder = newsletter.move_to_folder or settings.move_to_folder
+        if move_folder:
+            logger.debug(f"Moving email with id={num} to {move_folder}")
+            mail.copy(num, move_folder)
+            mail.store(num, "+FLAGS", "\\Deleted")
+
+        return "created"
+    except Exception as e:
+        db.rollback()
+        logger.error(
+            f"Error processing single email id={num}, continuing with next: {e}",
+            exc_info=True,
+        )
+        return "failed"
 
 
 def process_emails(db: Session) -> None:
@@ -253,7 +375,8 @@ def process_emails(db: Session) -> None:
     if not _is_configured(settings):
         return
 
-    all_newsletters = get_newsletters(db)
+    # Load every newsletter; the crud default limit of 100 is not enough.
+    all_newsletters = _get_all_newsletters(db)
     logger.info(f"Processing emails for {len(all_newsletters)} newsletters.")
 
     # Group newsletters by search folder
@@ -267,6 +390,10 @@ def process_emails(db: Session) -> None:
     # If auto-adding is enabled, ensure the default search folder is always checked.
     if settings.auto_add_new_senders and settings.search_folder not in folder_groups:
         folder_groups[settings.search_folder] = []
+
+    total_created = 0
+    total_failed = 0
+    total_skipped = 0
 
     for search_folder, newsletters_in_folder in folder_groups.items():
         logger.info(
@@ -288,8 +415,23 @@ def process_emails(db: Session) -> None:
             logger.info(
                 f"Found {len(email_ids)} unseen emails in folder '{search_folder}'."
             )
+            # One failing email must not abort the rest of the batch.
             for num in email_ids:
-                _process_single_email(num, mail, db, sender_map, settings)
+                try:
+                    result = _process_single_email(num, mail, db, sender_map, settings)
+                except Exception as e:
+                    db.rollback()
+                    logger.error(
+                        f"Unhandled error on email id={num}, continuing: {e}",
+                        exc_info=True,
+                    )
+                    result = "failed"
+                if result == "created":
+                    total_created += 1
+                elif result == "failed":
+                    total_failed += 1
+                else:
+                    total_skipped += 1
 
             # Expunge logic needs to be carefully considered.
             # If any newsletter in this folder group has a move_to_folder, we expunge.
@@ -310,4 +452,14 @@ def process_emails(db: Session) -> None:
         finally:
             mail.logout()
 
-    logger.info("Email processing finished successfully.")
+    # Report real counters instead of a blanket success.
+    if total_failed:
+        logger.warning(
+            f"Email processing finished WITH ERRORS: "
+            f"created={total_created} failed={total_failed} skipped={total_skipped}."
+        )
+    else:
+        logger.info(
+            f"Email processing finished successfully: "
+            f"created={total_created} skipped={total_skipped}."
+        )
