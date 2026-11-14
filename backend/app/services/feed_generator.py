@@ -57,7 +57,9 @@ def generate_feed(db: Session, feed_identifier: str):
     if not newsletter:
         return None
 
-    entries = get_entries_by_newsletter(db, newsletter.id)
+    entries = get_entries_by_newsletter(
+        db, newsletter.id, limit=settings.newsletter_feed_limit
+    )
 
     feed_url = f"{settings.app_base_url}/feeds/{newsletter.slug or newsletter.id}"
     sender_emails = ", ".join([s.email for s in newsletter.senders])
