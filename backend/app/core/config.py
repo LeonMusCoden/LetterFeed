@@ -46,6 +46,12 @@ class Settings(BaseSettings):
             "MASTER_FEED_LIMIT", "LETTERFEED_MASTER_FEED_LIMIT"
         ),
     )
+    newsletter_feed_limit: int = Field(
+        100,
+        validation_alias=AliasChoices(
+            "NEWSLETTER_FEED_LIMIT", "LETTERFEED_NEWSLETTER_FEED_LIMIT"
+        ),
+    )
 
 
 settings = Settings()
